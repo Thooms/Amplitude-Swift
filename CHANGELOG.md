@@ -1,3 +1,75 @@
+## [1.4.5](https://github.com/amplitude/Amplitude-Swift/compare/v1.4.4...v1.4.5) (2024-04-18)
+
+
+### Bug Fixes
+
+* Adopt resource bundle for privacy manifest in Cocoapods ([#156](https://github.com/amplitude/Amplitude-Swift/issues/156)) ([bdf2f43](https://github.com/amplitude/Amplitude-Swift/commit/bdf2f4375a71231d87b33e701571e36f2e67a0f1))
+
+## [1.4.4](https://github.com/amplitude/Amplitude-Swift/compare/v1.4.3...v1.4.4) (2024-04-01)
+
+
+### Bug Fixes
+
+* expose DET utils for flutter plugin ([dc7c619](https://github.com/amplitude/Amplitude-Swift/commit/dc7c6192fc439edb923798def08a3c3ce568e6e8))
+
+## [1.4.3](https://github.com/amplitude/Amplitude-Swift/compare/v1.4.2...v1.4.3) (2024-03-26)
+
+
+### Bug Fixes
+
+* Trim and dedup error logs ([#147](https://github.com/amplitude/Amplitude-Swift/issues/147)) ([1eb1633](https://github.com/amplitude/Amplitude-Swift/commit/1eb1633b5e3e5c0cd9f839e4a25d6c16723b4010))
+
+## [1.4.2](https://github.com/amplitude/Amplitude-Swift/compare/v1.4.1...v1.4.2) (2024-03-22)
+
+
+### Bug Fixes
+
+* better carthage support ([#142](https://github.com/amplitude/Amplitude-Swift/issues/142)) ([a6f1559](https://github.com/amplitude/Amplitude-Swift/commit/a6f155998e1472da05fa413ed1434168ba72e81a))
+* Fix compilation on Xcode 14.x ([#141](https://github.com/amplitude/Amplitude-Swift/issues/141)) ([8eedaab](https://github.com/amplitude/Amplitude-Swift/commit/8eedaab14b9b0be9ecd6575a950763e760c60e4e))
+* Use appropriate background task API for app extensions ([#138](https://github.com/amplitude/Amplitude-Swift/issues/138)) ([7231bee](https://github.com/amplitude/Amplitude-Swift/commit/7231beec5921e5ec7bf8d0d4d62c7464ff13a344))
+
+## [1.4.1](https://github.com/amplitude/Amplitude-Swift/compare/v1.4.0...v1.4.1) (2024-03-19)
+
+
+### Bug Fixes
+
+* Rely on on task completion vs http completion to end tasks ([#134](https://github.com/amplitude/Amplitude-Swift/issues/134)) ([b17e704](https://github.com/amplitude/Amplitude-Swift/commit/b17e7044e20e2690837dc5b87e7f0789540e7458))
+
+# [1.4.0](https://github.com/amplitude/Amplitude-Swift/compare/v1.3.6...v1.4.0) (2024-03-15)
+
+
+### Bug Fixes
+
+* Don't use idfv as deviceID if disabled. ([#133](https://github.com/amplitude/Amplitude-Swift/issues/133)) ([76ef012](https://github.com/amplitude/Amplitude-Swift/commit/76ef012e2949ff4722033ef59b188e4b9e98bc5b))
+* Fixes for automatic screen tracking ([#137](https://github.com/amplitude/Amplitude-Swift/issues/137)) ([55b2ca9](https://github.com/amplitude/Amplitude-Swift/commit/55b2ca95c9335188ae469a3fb3e39e978af84f9e))
+* tests on iOS 17 ([#136](https://github.com/amplitude/Amplitude-Swift/issues/136)) ([04e5d03](https://github.com/amplitude/Amplitude-Swift/commit/04e5d036d4690ceebce0603f5b52bb6e988ab3c9))
+
+
+### Features
+
+* migrate storage to for better thread safety ([#129](https://github.com/amplitude/Amplitude-Swift/issues/129)) ([2bbe919](https://github.com/amplitude/Amplitude-Swift/commit/2bbe919b78b2a102403f34dce2b0c3d9daf8c3e1))
+
+## [1.3.6](https://github.com/amplitude/Amplitude-Swift/compare/v1.3.5...v1.3.6) (2024-03-05)
+
+
+### Bug Fixes
+
+* Set inForeground to true after a new session has been started ([#124](https://github.com/amplitude/Amplitude-Swift/issues/124)) ([3780c44](https://github.com/amplitude/Amplitude-Swift/commit/3780c44fc65f1dd8913c25cf70fbe189e61fc315))
+
+## [1.3.5](https://github.com/amplitude/Amplitude-Swift/compare/v1.3.4...v1.3.5) (2024-02-28)
+
+
+### Bug Fixes
+
+* Do not migrate remnant data from legacy SDK when sandboxing is not enabled ([#127](https://github.com/amplitude/Amplitude-Swift/issues/127)) ([e92f6ed](https://github.com/amplitude/Amplitude-Swift/commit/e92f6ed2a93a034d39aab49885cf82a3b730a25c))
+
+## [1.3.4](https://github.com/amplitude/Amplitude-Swift/compare/v1.3.3...v1.3.4) (2024-02-23)
+
+
+### Bug Fixes
+
+* fix the enrichment plugin to enable filter event ([#123](https://github.com/amplitude/Amplitude-Swift/issues/123)) ([5d3aeb0](https://github.com/amplitude/Amplitude-Swift/commit/5d3aeb0494d6d2aa625d38019d04c46d82340aeb))
+
 ## [1.3.3](https://github.com/amplitude/Amplitude-Swift/compare/v1.3.2...v1.3.3) (2024-02-13)
 
 

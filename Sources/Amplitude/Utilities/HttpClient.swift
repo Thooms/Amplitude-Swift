@@ -10,9 +10,17 @@ import Foundation
 class HttpClient {
     let configuration: Configuration
     internal let session: URLSession
+    let diagnostics: Diagnostics
 
-    init(configuration: Configuration) {
+    private lazy var dateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter
+    }()
+
+    init(configuration: Configuration, diagnostics: Diagnostics) {
         self.configuration = configuration
+        self.diagnostics = diagnostics
 
         let sessionConfiguration = URLSessionConfiguration.default
         sessionConfiguration.httpMaximumConnectionsPerHost = 2
@@ -60,7 +68,19 @@ class HttpClient {
 
     func getRequest() throws -> URLRequest {
         let url = getUrl()
-        guard let requestUrl = URL(string: url) else {
+
+        let requestUrl: URL?
+#if compiler(>=5.9)
+        if #available(macOS 14.0, iOS 17.0, watchOS 10.0, tvOS 17.0, *) {
+            requestUrl = URL(string: url, encodingInvalidCharacters: false)
+        } else {
+            requestUrl = URL(string: url)
+        }
+#else
+        requestUrl = URL(string: url)
+#endif
+
+        guard let requestUrl else {
             throw Exception.invalidUrl(url: url)
         }
         var request = URLRequest(url: requestUrl, timeoutInterval: 60)
@@ -72,9 +92,7 @@ class HttpClient {
 
     func getRequestData(events: String) -> Data? {
         let apiKey = configuration.apiKey
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions.insert(.withFractionalSeconds)
-        let clientUploadTime: String = formatter.string(from: getDate())
+        let clientUploadTime: String = dateFormatter.string(from: getDate())
         var requestPayload = """
             {"api_key":"\(apiKey)","client_upload_time":"\(clientUploadTime)","events":\(events)
             """
@@ -82,6 +100,14 @@ class HttpClient {
             requestPayload += """
                 ,"options":{"min_id_length":\(minIdLength)}
                 """
+        }
+        if diagnostics.hasDiagnostics() {
+            let diagnosticsInfo = diagnostics.extractDiagonosticsToString()
+            if !diagnosticsInfo.isEmpty {
+                requestPayload += """
+                ,"request_metadata":{"sdk":\(diagnosticsInfo)}
+                """
+            }
         }
         requestPayload += "}"
         return requestPayload.data(using: .utf8)

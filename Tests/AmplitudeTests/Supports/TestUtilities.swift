@@ -1,7 +1,7 @@
-import Foundation
-import XCTest
-import Network
 import Combine
+import Foundation
+import Network
+import XCTest
 
 @testable import AmplitudeSwift
 
@@ -47,62 +47,75 @@ class FakeInMemoryStorage: Storage {
     var keyValueStore = [String: Any?]()
     var eventsStore = [URL: [BaseEvent]]()
     var index = URL(string: "0")!
+    let storageQueue = DispatchQueue(label: "Amplitude.FakeInMemoryStorage")
 
     func write(key: StorageKey, value: Any?) throws {
-        switch key {
-        case .EVENTS:
-            if let event = value as? BaseEvent {
-                var chunk = eventsStore[index, default: [BaseEvent]()]
-                chunk.append(event)
-                eventsStore[index] = chunk
+        storageQueue.sync {
+            switch key {
+            case .EVENTS:
+                if let event = value as? BaseEvent {
+                    var chunk = eventsStore[index, default: [BaseEvent]()]
+                    chunk.append(event)
+                    eventsStore[index] = chunk
+                }
+            default:
+                keyValueStore[key.rawValue] = value
             }
-        default:
-            keyValueStore[key.rawValue] = value
         }
     }
 
     func read<T>(key: StorageKey) -> T? {
-        var result: T?
-        switch key {
-        case .EVENTS:
-            result = Array(eventsStore.keys) as? T
-        default:
-            result = keyValueStore[key.rawValue] as? T
+        storageQueue.sync {
+            var result: T?
+            switch key {
+            case .EVENTS:
+                result = Array(eventsStore.keys) as? T
+            default:
+                result = keyValueStore[key.rawValue] as? T
+            }
+            return result
         }
-        return result
     }
 
     func getEventsString(eventBlock: EventBlock) -> String? {
-        var content: String?
-        content = "["
-        content = content! + (eventsStore[eventBlock] ?? []).map { $0.toString() }.joined(separator: ", ")
-        content = content! + "]"
-        return content
+        storageQueue.sync {
+            var content: String?
+            content = "["
+            content = content! + (eventsStore[eventBlock] ?? []).map { $0.toString() }.joined(separator: ", ")
+            content = content! + "]"
+            return content
+        }
     }
 
     func rollover() {
     }
 
     func reset() {
-        keyValueStore.removeAll()
-        eventsStore.removeAll()
+        storageQueue.sync {
+            keyValueStore.removeAll()
+            eventsStore.removeAll()
+        }
     }
 
     func remove(eventBlock: EventBlock) {
-        eventsStore.removeValue(forKey: eventBlock)
+        storageQueue.sync {
+            _ = eventsStore.removeValue(forKey: eventBlock)
+        }
     }
 
     func splitBlock(eventBlock: EventBlock, events: [BaseEvent]) {
     }
 
     func events() -> [BaseEvent] {
-        var result: [BaseEvent] = []
-        for (_, value) in eventsStore {
-            for event in value {
-                result.append(event)
+        storageQueue.sync {
+            var result: [BaseEvent] = []
+            for (_, value) in eventsStore {
+                for event in value {
+                    result.append(event)
+                }
             }
+            return result
         }
-        return result
     }
 
     nonisolated func getResponseHandler(
@@ -111,7 +124,9 @@ class FakeInMemoryStorage: Storage {
         eventBlock: EventBlock,
         eventsString: String
     ) -> ResponseHandler {
-        FakeResponseHandler(configuration: configuration, storage: self, eventPipeline: eventPipeline, eventBlock: eventBlock, eventsString: eventsString)
+        FakeResponseHandler(
+            configuration: configuration, storage: self, eventPipeline: eventPipeline, eventBlock: eventBlock,
+            eventsString: eventsString)
     }
 }
 
@@ -119,22 +134,34 @@ class FakeHttpClient: HttpClient {
     var uploadCount: Int = 0
     var uploadedEvents: [String] = []
     var uploadExpectations: [XCTestExpectation] = []
+    var uploadResults: [Result<Int, Error>] = []
 
     override func upload(events: String, completion: @escaping (_ result: Result<Int, Error>) -> Void)
         -> URLSessionDataTask?
     {
         uploadCount += 1
         uploadedEvents.append(events)
-        if !uploadExpectations.isEmpty {
-            uploadExpectations.removeFirst().fulfill()
+
+        let result: Result<Int, Error>
+        if uploadResults.isEmpty {
+            result = .success(200)
+        } else {
+            result = uploadResults.removeFirst()
         }
-        completion(Result.success(200))
-        return nil
+
+        DispatchQueue.global().async { [weak self] in
+            completion(result)
+
+            if let self, !self.uploadExpectations.isEmpty {
+                self.uploadExpectations.removeFirst().fulfill()
+            }
+        }
+        return URLSession.shared.dataTask(with: URLRequest(url: URL(string: "https://www.amplitude.com")!))
     }
 
     override func getDate() -> Date {
         // timestamp of 2023-10-24T18:16:24.000 in UTC time zone
-        return Date(timeIntervalSince1970: 1698171384)
+        return Date(timeIntervalSince1970: 1_698_171_384)
     }
 }
 
@@ -287,5 +314,14 @@ final class MockPathCreation: PathCreationProtocol {
     func simulateNetworkChange(status: NWPath.Status) {
         let networkPath = NetworkPath(status: status)
         subject.send(networkPath)
+    }
+}
+
+class SessionsWithDelayedEventStartProcessing: Sessions {
+    override func processEvent(event: BaseEvent, inForeground: Bool) -> [BaseEvent] {
+        if event.eventType == Constants.AMP_SESSION_START_EVENT {
+            sleep(3)
+        }
+        return super.processEvent(event: event, inForeground: inForeground)
     }
 }

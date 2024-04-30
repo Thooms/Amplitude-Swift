@@ -2,13 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
-			<false/>
+			<true/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>
 			<false/>
 			<key>NSPrivacyCollectedDataTypePurposes</key>
@@ -40,13 +51,6 @@
 				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
 			</array>
 		</dict>
-	</array>
-	<key>NSPrivacyTrackingDomains</key>
-	<array>
-		<string>https://api2.amplitude.com/2/httpapi</string>
-		<string>https://api.eu.amplitude.com/2/httpapi</string>
-		<string>https://api2.amplitude.com/batch</string>
-		<string>https://api.eu.amplitude.com/batch</string>
 	</array>
 </dict>
 </plist>

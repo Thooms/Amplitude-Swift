@@ -41,7 +41,7 @@ public class Amplitude {
 
         migrateApiKeyStorages()
         migrateDefaultInstanceStorages()
-        if configuration.migrateLegacyData && getStorageVersion() < .API_KEY_AND_INSTANCE_NAME {
+        if configuration.migrateLegacyData && getStorageVersion() < .API_KEY_AND_INSTANCE_NAME && isSandboxEnabled() {
             RemnantDataMigration(self).execute()
         }
         migrateInstanceOnlyStorages()
@@ -319,12 +319,13 @@ public class Amplitude {
     }
 
     func onEnterForeground(timestamp: Int64) {
-        inForeground = true
         let dummySessionStartEvent = BaseEvent(
             timestamp: timestamp,
             eventType: Constants.AMP_SESSION_START_EVENT
         )
         let events = sessions.processEvent(event: dummySessionStartEvent, inForeground: false)
+        // Set inForeground to true only after we have successfully started a new session if needed. 
+        inForeground = true
         events.forEach { e in timeline.processEvent(event: e) }
     }
 
@@ -348,12 +349,12 @@ public class Amplitude {
         }
         configuration.loggerProvider.debug(message: "Running migrateApiKeyStorages")
         if let persistentStorage = configuration.storageProvider as? PersistentStorage {
-            let apiKeyStorage = PersistentStorage(storagePrefix: "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-\(configuration.apiKey)")
+            let apiKeyStorage = PersistentStorage(storagePrefix: "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-\(configuration.apiKey)", logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(source: apiKeyStorage, destination: persistentStorage, logger: logger).execute()
         }
 
         if let persistentIdentifyStorage = configuration.identifyStorageProvider as? PersistentStorage {
-            let apiKeyIdentifyStorage = PersistentStorage(storagePrefix: "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-identify-\(configuration.apiKey)")
+            let apiKeyIdentifyStorage = PersistentStorage(storagePrefix: "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-identify-\(configuration.apiKey)", logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(source: apiKeyIdentifyStorage, destination: persistentIdentifyStorage, logger: logger).execute()
         }
     }
@@ -366,12 +367,12 @@ public class Amplitude {
         configuration.loggerProvider.debug(message: "Running migrateDefaultInstanceStorages")
         let legacyDefaultInstanceName = "default_instance"
         if let persistentStorage = configuration.storageProvider as? PersistentStorage {
-            let legacyStorage = PersistentStorage(storagePrefix: "storage-\(legacyDefaultInstanceName)")
+            let legacyStorage = PersistentStorage(storagePrefix: "storage-\(legacyDefaultInstanceName)", logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(source: legacyStorage, destination: persistentStorage, logger: logger).execute()
         }
 
         if let persistentIdentifyStorage = configuration.identifyStorageProvider as? PersistentStorage {
-            let legacyIdentifyStorage = PersistentStorage(storagePrefix: "identify-\(legacyDefaultInstanceName)")
+            let legacyIdentifyStorage = PersistentStorage(storagePrefix: "identify-\(legacyDefaultInstanceName)", logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(source: legacyIdentifyStorage, destination: persistentIdentifyStorage, logger: logger).execute()
         }
     }
@@ -392,7 +393,7 @@ public class Amplitude {
         let instanceName = configuration.getNormalizeInstanceName()
         if let persistentStorage = configuration.storageProvider as? PersistentStorage {
             let instanceOnlyEventPrefix = "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-storage-\(instanceName)"
-            let instanceNameOnlyStorage = PersistentStorage(storagePrefix: instanceOnlyEventPrefix)
+            let instanceNameOnlyStorage = PersistentStorage(storagePrefix: instanceOnlyEventPrefix, logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(
                 source: instanceNameOnlyStorage,
                 destination: persistentStorage,
@@ -402,7 +403,7 @@ public class Amplitude {
 
         if let persistentIdentifyStorage = configuration.identifyStorageProvider as? PersistentStorage {
             let instanceOnlyIdentifyPrefix = "\(PersistentStorage.DEFAULT_STORAGE_PREFIX)-identify-\(instanceName)"
-            let instanceNameOnlyIdentifyStorage = PersistentStorage(storagePrefix: instanceOnlyIdentifyPrefix)
+            let instanceNameOnlyIdentifyStorage = PersistentStorage(storagePrefix: instanceOnlyIdentifyPrefix, logger: self.logger, diagonostics: configuration.diagonostics)
             StoragePrefixMigration(
                 source: instanceNameOnlyIdentifyStorage,
                 destination: persistentIdentifyStorage,
