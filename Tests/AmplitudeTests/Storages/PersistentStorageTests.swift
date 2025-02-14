@@ -173,7 +173,6 @@ final class PersistentStorageTests: XCTestCase {
         let partial = "{\"event_type\":\"test1\",\"user_id\":\"159995596214061\",\"device_id\":\"9b935bb3cd75\","
         let malformedContent = "\(event1.toString())\(PersistentStorage.DELMITER)\(partial)\(PersistentStorage.DELMITER)"
         writeContent(file: currentFile, content: malformedContent)
-        let rawFiles = try? FileManager.default.contentsOfDirectory(at: storeDirectory, includingPropertiesForKeys: nil)
         let eventFiles: [URL]? = persistentStorage.read(key: StorageKey.EVENTS)
         XCTAssertEqual(eventFiles?.count, 1)
 
@@ -184,8 +183,7 @@ final class PersistentStorageTests: XCTestCase {
         let data = try? JSONSerialization.data(withJSONObject: malformedArr, options: [])
         let expectedPartial = String(data: data!, encoding: .utf8) ?? ""
         XCTAssertEqual(decodedEvents!.count, 1)
-        XCTAssertTrue(self.diagonostics.hasDiagnostics() == true)
-        XCTAssertEqual(self.diagonostics.extractDiagonosticsToString(), "{\"malformed_events\":\(expectedPartial)}")
+        XCTAssertEqual(self.diagonostics.extractDiagnosticsToString(), "{\"malformed_events\":\(expectedPartial)}")
         persistentStorage.reset()
    }
 

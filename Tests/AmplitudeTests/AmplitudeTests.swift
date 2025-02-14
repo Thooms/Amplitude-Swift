@@ -39,7 +39,7 @@ final class AmplitudeTests: XCTestCase {
             apiKey: apiKey,
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions.NONE
+            autocapture: []
         )
     }
 
@@ -72,6 +72,7 @@ final class AmplitudeTests: XCTestCase {
         let outputReader = OutputReaderPlugin()
         amplitude.add(plugin: outputReader)
         amplitude.track(event: BaseEvent(eventType: "testEvent"))
+        amplitude.waitForTrackingQueue()
 
         let lastEvent = outputReader.lastEvent
         XCTAssertEqual(lastEvent?.library, "\(Constants.SDK_LIBRARY)/\(Constants.SDK_VERSION)")
@@ -109,6 +110,7 @@ final class AmplitudeTests: XCTestCase {
         amplitude.add(plugin: testPlugin)
         amplitude.track(event: BaseEvent(eventType: enrichedEventType))
         amplitude.track(event: BaseEvent(eventType: "Other Event"))
+        amplitude.waitForTrackingQueue()
 
         let events = storage.events()
         XCTAssertEqual(events[0].eventType, enrichedEventType)
@@ -117,6 +119,78 @@ final class AmplitudeTests: XCTestCase {
         ])
 
         XCTAssertEqual(events.count, 1)
+    }
+
+    func testPluginChangeNotifications() {
+        class TestPlugin: Plugin {
+            let type: PluginType = .enrichment
+
+            var deviceIdChanged: ((String?) -> Void)?
+            var sessionIdChanged: ((Int64?) -> Void)?
+            var userIdChanged: ((String?) -> Void)?
+            var optOutChanged: ((Bool) -> Void)?
+
+            func onDeviceIdChanged(_ deviceId: String?) {
+                deviceIdChanged?(deviceId)
+            }
+
+            func onSessionIdChanged(_ sessionId: Int64) {
+                sessionIdChanged?(sessionId)
+            }
+
+            func onUserIdChanged(_ userId: String?) {
+                userIdChanged?(userId)
+            }
+
+            func onOptOutChanged(_ optOut: Bool) {
+                optOutChanged?(optOut)
+            }
+        }
+
+        let testPlugin = TestPlugin()
+        let amplitude = Amplitude(configuration: Configuration(apiKey: "testPluginChangeNotifications",
+                                                               flushIntervalMillis: 1000000,
+                                                               optOut: false,
+                                                               storageProvider: FakeInMemoryStorage()))
+        amplitude.add(plugin: testPlugin)
+        amplitude.waitForTrackingQueue()
+
+        let expectedDeviceId = "test_device_id"
+        let deviceIdExpectation = expectation(description: "Should receive deviceId changes")
+        testPlugin.deviceIdChanged = { deviceId in
+            XCTAssertEqual(deviceId, expectedDeviceId)
+            XCTAssertEqual(amplitude.getDeviceId(), expectedDeviceId)
+            deviceIdExpectation.fulfill()
+        }
+        amplitude.setDeviceId(deviceId: expectedDeviceId)
+
+        let expectedSessionId = Int64(Date().timeIntervalSince1970 * 1000)
+        let sessionIdExpectation = expectation(description: "Should receive sessionId changes")
+        testPlugin.sessionIdChanged = { sessionId in
+            XCTAssertEqual(sessionId, expectedSessionId)
+            XCTAssertEqual(amplitude.getSessionId(), expectedSessionId)
+            sessionIdExpectation.fulfill()
+        }
+        amplitude.setSessionId(timestamp: expectedSessionId)
+
+        let expectedUserId = "test_user_id"
+        let userIdExpectation = expectation(description: "Should receive userId changes")
+        testPlugin.userIdChanged = { userId in
+            XCTAssertEqual(userId, expectedUserId)
+            XCTAssertEqual(amplitude.getUserId(), expectedUserId)
+            userIdExpectation.fulfill()
+        }
+        amplitude.setUserId(userId: expectedUserId)
+
+        let optOutExpectation = expectation(description: "Should receive optOut changes")
+        testPlugin.optOutChanged = { optOut in
+            XCTAssertTrue(optOut)
+            XCTAssertTrue(amplitude.configuration.optOut)
+            optOutExpectation.fulfill()
+        }
+        amplitude.configuration.optOut = true
+
+        waitForExpectations(timeout: 10)
     }
 
     func testContextWithDisableTrackingOptions() {
@@ -179,6 +253,7 @@ final class AmplitudeTests: XCTestCase {
         amplitude.setUserId(userId: "test-user")
         amplitude.identify(identify: Identify().set(property: "key-1", value: "value-1"))
         amplitude.identify(identify: Identify().set(property: "key-2", value: "value-2"))
+        amplitude.waitForTrackingQueue()
 
         var intercepts = interceptStorageMem.events()
         var events = storageMem.events()
@@ -186,6 +261,7 @@ final class AmplitudeTests: XCTestCase {
         XCTAssertEqual(events.count, 0)
 
         amplitude.flush()
+        amplitude.waitForTrackingQueue()
 
         intercepts = interceptStorageMem.events()
         events = storageMem.events()
@@ -201,7 +277,7 @@ final class AmplitudeTests: XCTestCase {
             apiKey: apiKey,
             storageProvider: storageTest,
             identifyStorageProvider: interceptStorageTest,
-            defaultTracking: DefaultTrackingOptions.NONE
+            autocapture: []
         ))
 
         amplitude.setUserId(userId: "test-user")
@@ -209,6 +285,7 @@ final class AmplitudeTests: XCTestCase {
         // send 2 $set only Identify's, should be intercepted
         amplitude.identify(identify: Identify().set(property: "key-1", value: "value-1"))
         amplitude.identify(identify: Identify().set(property: "key-2", value: "value-2"))
+        amplitude.waitForTrackingQueue()
 
         var intercepts = interceptStorageTest.events()
         var events = storageTest.events()
@@ -217,6 +294,7 @@ final class AmplitudeTests: XCTestCase {
 
         // setGroup event should not be intercepted
         amplitude.setGroup(groupType: "group-type", groupName: "group-name")
+        amplitude.waitForTrackingQueue()
 
         intercepts = interceptStorageTest.events()
         XCTAssertEqual(intercepts.count, 0)
@@ -282,13 +360,14 @@ final class AmplitudeTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
     }
 
-    func testInit_defaultTracking() {
+    func testInit_autocapture() {
         let configuration = Configuration(apiKey: "api-key")
         let amplitude = Amplitude(configuration: configuration)
-        let defaultTracking = amplitude.configuration.defaultTracking
-        XCTAssertFalse(defaultTracking.appLifecycles)
-        XCTAssertFalse(defaultTracking.screenViews)
-        XCTAssertTrue(defaultTracking.sessions)
+        let autocapture = amplitude.configuration.autocapture
+        XCTAssertFalse(autocapture.contains(.appLifecycles))
+        XCTAssertFalse(autocapture.contains(.screenViews))
+        XCTAssertFalse(autocapture.contains(.elementInteractions))
+        XCTAssertTrue(autocapture.contains(.sessions))
     }
 
     func testTrackNSUserActivity() throws {
@@ -296,7 +375,7 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
 
         let amplitude = Amplitude(configuration: configuration)
@@ -306,6 +385,7 @@ final class AmplitudeTests: XCTestCase {
         userActivity.referrerURL = URL(string: "https://test-referrer.com")
 
         amplitude.track(event: DeepLinkOpenedEvent(activity: userActivity))
+        amplitude.waitForTrackingQueue()
 
         let events = storageMem.events()
         XCTAssertEqual(events.count, 1)
@@ -323,12 +403,13 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
 
         let amplitude = Amplitude(configuration: configuration)
 
         amplitude.track(event: DeepLinkOpenedEvent(url: URL(string: "https://test-app.com")!))
+        amplitude.waitForTrackingQueue()
 
         let events = storageMem.events()
         XCTAssertEqual(events.count, 1)
@@ -345,12 +426,13 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
 
         let amplitude = Amplitude(configuration: configuration)
 
         amplitude.track(event: DeepLinkOpenedEvent(url: NSURL(string: "https://test-app.com")!))
+        amplitude.waitForTrackingQueue()
 
         let events = storageMem.events()
         XCTAssertEqual(events.count, 1)
@@ -367,12 +449,13 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
 
         let amplitude = Amplitude(configuration: configuration)
 
         amplitude.track(event: ScreenViewedEvent(screenName: "main view"))
+        amplitude.waitForTrackingQueue()
 
         let events = storageMem.events()
         XCTAssertEqual(events.count, 1)
@@ -389,12 +472,13 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
         let amplitude = Amplitude(configuration: configuration)
         let eventOptions = EventOptions(sessionId: -1)
         let eventType = "out of session event"
         amplitude.track(eventType: eventType, options: eventOptions)
+        amplitude.waitForTrackingQueue()
         let events = storageMem.events()
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events[0].eventType, eventType)
@@ -406,7 +490,7 @@ final class AmplitudeTests: XCTestCase {
             apiKey: "api-key",
             storageProvider: storageMem,
             identifyStorageProvider: interceptStorageMem,
-            defaultTracking: DefaultTrackingOptions(sessions: false)
+            autocapture: []
         )
         let amplitude = Amplitude(configuration: configuration)
         amplitude.sessions = SessionsWithDelayedEventStartProcessing(amplitude: amplitude)
@@ -415,23 +499,23 @@ final class AmplitudeTests: XCTestCase {
         let oneHourEarlierTimestamp = timestamp - (1 * 60 * 60 * 1000)
         amplitude.setSessionId(timestamp: oneHourEarlierTimestamp)
 
-        @Sendable
-        func processStartSessionEvent() async {
+        // We process the session start event first. The session class will wait for 3 seconds before it processes
+        // the event
+        let processSessionStartEvent = Task.detached {
             amplitude.onEnterForeground(timestamp: timestamp)
         }
 
-        func processRegularEvent() async {
+        // Sleep for 1 second and process a regular event. This is to try the case where an event gets processed
+        // before the session start event
+        let processRegularEvent = Task.detached {
+            try await Task.sleep(nanoseconds: NSEC_PER_SEC)
             amplitude.track(eventType: "test_event")
         }
 
-        // We process the session start event first. The session class will wait for 3 seconds before it processes
-        // the event
-        async let task = processStartSessionEvent()
-        // Sleep for 1 second and process a regular event. This is to try the case where an event gets processed
-        // before the session start event
-        sleep(1)
-        await processRegularEvent()
-        await task
+        _ = await processRegularEvent.result
+        _ = await processSessionStartEvent.result
+
+        amplitude.waitForTrackingQueue()
 
         // We want to make sure that a new session was started
         XCTAssertTrue(amplitude.getSessionId() > oneHourEarlierTimestamp)
@@ -446,7 +530,7 @@ final class AmplitudeTests: XCTestCase {
             flushQueueSize: 1000,
             flushIntervalMillis: 99999,
             logLevel: LogLevelEnum.DEBUG,
-            defaultTracking: DefaultTrackingOptions.NONE
+            autocapture: []
         )
 
         // Create storages using instance name only
@@ -462,7 +546,7 @@ final class AmplitudeTests: XCTestCase {
                 storageProvider: legacyEventStorage,
                 identifyStorageProvider: legacyIdentityStorage,
                 logLevel: config.logLevel,
-                defaultTracking: config.defaultTracking
+                autocapture: config.autocapture
             ))
 
         let legacyDeviceId = legacyStorageAmplitude.getDeviceId()
@@ -474,6 +558,7 @@ final class AmplitudeTests: XCTestCase {
         // track events to legacy storage
         legacyStorageAmplitude.identify(identify: Identify().set(property: "user-prop", value: true))
         legacyStorageAmplitude.track(event: BaseEvent(eventType: "Legacy Storage Event"))
+        legacyStorageAmplitude.waitForTrackingQueue()
 
         guard let legacyEventFiles: [URL]? = legacyEventStorage.read(key: StorageKey.EVENTS) else { return }
 
@@ -529,7 +614,7 @@ final class AmplitudeTests: XCTestCase {
                 flushQueueSize: 1000,
                 flushIntervalMillis: 99999,
                 logLevel: LogLevelEnum.DEBUG,
-                defaultTracking: DefaultTrackingOptions.NONE
+                autocapture: []
             )
 
         // Create storages using instance name only
@@ -545,7 +630,7 @@ final class AmplitudeTests: XCTestCase {
                     storageProvider: legacyEventStorage,
                     identifyStorageProvider: legacyIdentityStorage,
                     logLevel: config.logLevel,
-                    defaultTracking: config.defaultTracking
+                    autocapture: config.autocapture
                 ))
 
             let legacyDeviceId = legacyStorageAmplitude.getDeviceId()
@@ -557,6 +642,7 @@ final class AmplitudeTests: XCTestCase {
             // track events to legacy storage
             legacyStorageAmplitude.identify(identify: Identify().set(property: "user-prop", value: true))
             legacyStorageAmplitude.track(event: BaseEvent(eventType: "Legacy Storage Event"))
+            legacyStorageAmplitude.waitForTrackingQueue()
 
             guard let legacyEventFiles: [URL]? = legacyEventStorage.read(key: StorageKey.EVENTS) else { return }
 
@@ -675,8 +761,157 @@ final class AmplitudeTests: XCTestCase {
     }
     #endif
 
+    func testReset() {
+        let amplitude = Amplitude(configuration: Configuration(apiKey: "test-api-key"))
+        amplitude.setUserId(userId: "originalUserId")
+        amplitude.setDeviceId(deviceId: "originalDeviceId")
+        amplitude.reset()
+        XCTAssertNil(amplitude.getUserId())
+        XCTAssertNotEqual(amplitude.getDeviceId(), "originalDeviceId")
+    }
+
     func testInit_Offline() {
         XCTAssertEqual(Amplitude(configuration: configuration).configuration.offline, false)
+    }
+
+    func testConcurrentAccess() {
+        let amplitude = Amplitude(configuration: Configuration(apiKey: "test-api-key",
+                                                               storageProvider: InMemoryStorage(),
+                                                               autocapture: [.sessions, .appLifecycles]))
+        let eventCollector = EventCollectorPlugin()
+        amplitude.add(plugin: eventCollector)
+        let sessionID = Int64(Date().timeIntervalSince1970 * 1000)
+        amplitude.setSessionId(timestamp: sessionID)
+
+        DispatchQueue.concurrentPerform(iterations: 100) { i in
+            amplitude.onEnterForeground(timestamp: Int64(Date().timeIntervalSince1970 * 1000))
+            amplitude.track(eventType: "Test Event \(i)")
+            amplitude.onExitForeground(timestamp: Int64(Date().timeIntervalSince1970 * 1000))
+        }
+
+        amplitude.waitForTrackingQueue()
+
+        XCTAssertEqual(amplitude.getSessionId(), sessionID)
+
+        var allEventIds = Set((0..<100).map { "Test Event \($0)" })
+        allEventIds.insert("session_start")
+        XCTAssertEqual(allEventIds, Set(eventCollector.events.map(\.eventType)))
+    }
+
+    func testDealloc() {
+        class TestAmplitude: Amplitude {
+
+            static let expectedEventType = "Test"
+
+            class TestStorage: InMemoryStorage {
+
+                private let expectation: XCTestExpectation
+
+                init(expectation: XCTestExpectation) {
+                    self.expectation = expectation
+                }
+
+                override func write(key: StorageKey, value: Any?) {
+                    if key == .EVENTS, let event = value as? BaseEvent, event.eventType == TestAmplitude.expectedEventType {
+                        expectation.fulfill()
+                    }
+                }
+            }
+
+            private let deallocExpectation: XCTestExpectation
+
+            init(deallocExpectation: XCTestExpectation, trackExpectation: XCTestExpectation) {
+                self.deallocExpectation = deallocExpectation
+                super.init(configuration: Configuration(apiKey: "test-api-key",
+                                                        storageProvider: TestStorage(expectation: trackExpectation)))
+            }
+
+            deinit {
+                deallocExpectation.fulfill()
+            }
+        }
+
+        let deallocExpectation = XCTestExpectation(description: "Amplitude object deallocates")
+        let trackExpectation = XCTestExpectation(description: "Event persisted to storage")
+
+        autoreleasepool {
+            let amplitude = TestAmplitude(deallocExpectation: deallocExpectation,
+                                          trackExpectation: trackExpectation)
+            amplitude.track(eventType: TestAmplitude.expectedEventType)
+            wait(for: [trackExpectation], timeout: 10.0)
+        }
+        wait(for: [deallocExpectation], timeout: 10.0)
+    }
+
+    func testTrimQueuedEvents() {
+        class TrimTestStorage: Storage {
+
+            private var events: [URL: Int] = [:]
+
+            func addEventFile(url: URL, eventCount: Int) {
+                events[url] = eventCount
+            }
+
+            func write(key: StorageKey, value: Any?) throws {}
+
+            func read<T>(key: StorageKey) -> T? {
+                switch key {
+                case .EVENTS:
+                    return events.keys.sorted(by: {$0.absoluteString < $1.absoluteString}) as? T
+                default:
+                    return nil
+                }
+            }
+
+            func getEventsString(eventBlock: URL) -> String? {
+                guard let eventCount = events[eventBlock] else {
+                    return nil
+                }
+
+                let events = (0..<eventCount).map { BaseEvent(eventType: "Event \($0)") }
+
+                guard let jsonData = try? JSONEncoder().encode(events) else {
+                    return nil
+                }
+
+                return String(data: jsonData, encoding: .utf8)
+            }
+
+            func remove(eventBlock: URL) {
+                events[eventBlock] = nil
+            }
+
+            func splitBlock(eventBlock: URL, events: [BaseEvent]) {}
+
+            func rollover() {}
+
+            func reset() {}
+
+            func getResponseHandler(configuration: Configuration,
+                                    eventPipeline: EventPipeline,
+                                    eventBlock: URL,
+                                    eventsString: String) -> ResponseHandler {
+                abort()
+            }
+        }
+
+        let storage = TrimTestStorage()
+        storage.addEventFile(url: URL(string: "file://test/0")!, eventCount: 10)
+        storage.addEventFile(url: URL(string: "file://test/1")!, eventCount: 10)
+        storage.addEventFile(url: URL(string: "file://test/2")!, eventCount: 10)
+        storage.addEventFile(url: URL(string: "file://test/3")!, eventCount: 10)
+
+        let amplitude = Amplitude(configuration: Configuration(apiKey: "test-api-key",
+                                                               storageProvider: storage,
+                                                               maxQueuedEventCount: 15))
+        amplitude.waitForTrackingQueue()
+
+        let allEventBlocks: [URL] = storage.read(key: .EVENTS) ?? []
+
+        XCTAssert(!allEventBlocks.contains(URL(string: "file://test/0")!))
+        XCTAssert(!allEventBlocks.contains(URL(string: "file://test/1")!))
+        XCTAssert(allEventBlocks.contains(URL(string: "file://test/2")!))
+        XCTAssert(allEventBlocks.contains(URL(string: "file://test/3")!))
     }
 
     func getDictionary(_ props: [String: Any?]) -> NSDictionary {

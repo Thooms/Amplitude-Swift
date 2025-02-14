@@ -8,16 +8,22 @@
 import Foundation
 
 class State {
-    var userId: String? {
+    @Atomic var userId: String? {
         didSet {
+            lock.lock()
+            defer { lock.unlock() }
+
             for plugin in plugins {
                 plugin.onUserIdChanged(userId)
             }
         }
     }
 
-    var deviceId: String? {
+    @Atomic var deviceId: String? {
         didSet {
+            lock.lock()
+            defer { lock.unlock() }
+
             for plugin in plugins {
                 plugin.onDeviceIdChanged(deviceId)
             }
@@ -25,12 +31,19 @@ class State {
     }
 
     private var plugins: [ObservePlugin] = []
+    private let lock = NSLock()
 
     func add(plugin: ObservePlugin) {
+        lock.lock()
+        defer { lock.unlock() }
+
         plugins.append(plugin)
     }
 
     func remove(plugin: ObservePlugin) {
+        lock.lock()
+        defer { lock.unlock() }
+
         plugins.removeAll(where: { $0 === plugin })
     }
 }

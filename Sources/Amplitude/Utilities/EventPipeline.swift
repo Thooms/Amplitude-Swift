@@ -8,23 +8,28 @@
 import Foundation
 
 public class EventPipeline {
-    let amplitude: Amplitude
     var httpClient: HttpClient
-    var storage: Storage? { amplitude.storage }
+    let storage: Storage?
+    let logger: (any Logger)?
+    let configuration: Configuration
+    var maxRetryInterval: TimeInterval = 60
+    var maxRetryCount: Int = 6
+
     @Atomic internal var eventCount: Int = 0
     internal var flushTimer: QueueTimer?
     private let uploadsQueue = DispatchQueue(label: "uploadsQueue.amplitude.com")
 
-    internal struct UploadTaskInfo {
-        let events: String
-        let task: URLSessionDataTask
-    }
-    private var uploads = [URL: UploadTaskInfo]()
+    private var flushCompletions: [() -> Void] = []
+    private var currentUpload: URLSessionTask?
 
     init(amplitude: Amplitude) {
-        self.amplitude = amplitude
-        self.httpClient = HttpClient(configuration: amplitude.configuration, diagnostics: amplitude.configuration.diagonostics)
-        self.flushTimer = QueueTimer(interval: getFlushInterval()) { [weak self] in
+        storage = amplitude.storage
+        logger = amplitude.logger
+        configuration = amplitude.configuration
+        httpClient = HttpClient(configuration: amplitude.configuration,
+                                diagnostics: amplitude.configuration.diagonostics,
+                                callbackQueue: amplitude.trackingQueue)
+        flushTimer = QueueTimer(interval: getFlushInterval(), queue: amplitude.trackingQueue) { [weak self] in
             self?.flush()
         }
     }
@@ -40,50 +45,101 @@ public class EventPipeline {
             }
             completion?()
         } catch {
-            amplitude.logger?.error(message: "Error when storing event: \(error.localizedDescription)")
+            logger?.error(message: "Error when storing event: \(error.localizedDescription)")
         }
     }
 
     func flush(completion: (() -> Void)? = nil) {
-        if self.amplitude.configuration.offline == true {
-            self.amplitude.logger?.debug(message: "Skipping flush while offline.")
+        if configuration.offline == true {
+            logger?.debug(message: "Skipping flush while offline.")
             return
         }
 
-        amplitude.logger?.log(message: "Start flushing \(eventCount) events")
+        logger?.log(message: "Start flushing \(eventCount) events")
         eventCount = 0
         guard let storage = self.storage else { return }
         storage.rollover()
-        guard let eventFiles: [URL] = storage.read(key: StorageKey.EVENTS) else { return }
-        for eventFile in eventFiles {
-            uploadsQueue.sync {
-                guard uploads[eventFile] == nil else {
-                    amplitude.logger?.log(message: "Existing upload in progress, skipping...")
-                    return
-                }
-                guard let eventsString = storage.getEventsString(eventBlock: eventFile),
-                      !eventsString.isEmpty else {
-                    return
-                }
-                let uploadTask = httpClient.upload(events: eventsString) { [weak self] result in
-                    guard let self else {
-                        return
+
+        uploadsQueue.async { [self] in
+            if let completion {
+                flushCompletions.append(completion)
+            }
+            self.sendNextEventFile()
+        }
+    }
+
+    private func sendNextEventFile(failures: Int = 0) {
+        autoreleasepool {
+            guard currentUpload == nil else {
+                logger?.log(message: "Existing upload in progress, skipping...")
+                return
+            }
+
+            guard let storage = storage,
+                  let eventFiles: [URL] = storage.read(key: StorageKey.EVENTS),
+                  let nextEventFile = eventFiles.first else {
+                flushCompletions.forEach { $0() }
+                flushCompletions.removeAll()
+                logger?.debug(message: "No event files to upload")
+                return
+            }
+
+            guard configuration.offline != true else {
+                logger?.debug(message: "Skipping flush while offline.")
+                return
+            }
+
+            guard let eventsString = storage.getEventsString(eventBlock: nextEventFile),
+                  !eventsString.isEmpty else {
+                logger?.log(message: "Could not read events file: \(nextEventFile)")
+                return
+            }
+
+            currentUpload = httpClient.upload(events: eventsString) { [self] result in
+                let responseHandler = storage.getResponseHandler(
+                    configuration: self.configuration,
+                    eventPipeline: self,
+                    eventBlock: nextEventFile,
+                    eventsString: eventsString
+                )
+                let handled: Bool = responseHandler.handle(result: result)
+                var failures = failures
+
+                switch result {
+                case .success:
+                    failures = 0
+                case .failure:
+                    if !handled {
+                        failures += 1
                     }
-                    let responseHandler = storage.getResponseHandler(
-                        configuration: self.amplitude.configuration,
-                        eventPipeline: self,
-                        eventBlock: eventFile,
-                        eventsString: eventsString
-                    )
-                    responseHandler.handle(result: result)
-                    self.completeUpload(for: eventFile)
                 }
-                if let uploadTask {
-                    uploads[eventFile] = UploadTaskInfo(events: eventsString, task: uploadTask)
+
+                if failures > self.maxRetryCount {
+                    self.uploadsQueue.async {
+                        self.currentUpload = nil
+                    }
+                    self.configuration.offline = true
+                    self.logger?.error(message: "Request failed more than \(self.maxRetryCount) times, marking offline")
+                } else {
+                    // Don't send the next event file if we're being deallocated
+                    let nextFileBlock: () -> Void = { [weak self] in
+                        guard let self = self else {
+                            return
+                        }
+                        self.currentUpload = nil
+                        self.sendNextEventFile(failures: failures)
+                    }
+
+                    if failures == 0 || handled {
+                        self.uploadsQueue.async(execute: nextFileBlock)
+                    } else {
+                        let sendingInterval = min(self.maxRetryInterval, pow(2, Double(failures - 1)))
+                        self.uploadsQueue.asyncAfter(deadline: .now() + sendingInterval, execute: nextFileBlock)
+                        self.logger?.error(message: "Request failed \(failures) times, send next event file in \(sendingInterval) seconds")
+                    }
                 }
             }
         }
-        completion?()
     }
 
     func start() {
@@ -95,20 +151,11 @@ public class EventPipeline {
     }
 
     private func getFlushInterval() -> TimeInterval {
-        return TimeInterval.milliseconds(amplitude.configuration.flushIntervalMillis)
+        return TimeInterval.milliseconds(configuration.flushIntervalMillis)
     }
 
     private func getFlushCount() -> Int {
-        let count = amplitude.configuration.flushQueueSize
+        let count = configuration.flushQueueSize
         return count != 0 ? count : 1
-    }
-}
-
-extension EventPipeline {
-
-    func completeUpload(for eventBlock: URL) {
-        uploadsQueue.sync {
-            uploads[eventBlock] = nil
-        }
     }
 }

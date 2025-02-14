@@ -12,6 +12,7 @@ final class IdentifyInterceptorTests: XCTestCase {
     private var configuration: Configuration!
     private var pipeline: EventPipeline!
     private var mockPathCreation: MockPathCreation!
+    private var amplitude: Amplitude!
 
     override func setUp() {
         super.setUp()
@@ -25,7 +26,7 @@ final class IdentifyInterceptorTests: XCTestCase {
             identifyBatchIntervalMillis: identifyBatchIntervalMillis,
             offline: NetworkConnectivityCheckerPlugin.Disabled
         )
-        let amplitude = Amplitude(configuration: configuration)
+        amplitude = Amplitude(configuration: configuration)
         mockPathCreation = MockPathCreation()
         amplitude.add(plugin: NetworkConnectivityCheckerPlugin(pathCreation: mockPathCreation))
         httpClient = FakeHttpClient(configuration: configuration, diagnostics: configuration.diagonostics)
@@ -33,7 +34,8 @@ final class IdentifyInterceptorTests: XCTestCase {
         pipeline.httpClient = httpClient
         interceptor = TestIdentifyInterceptor(
             configuration: configuration,
-            pipeline: pipeline
+            pipeline: pipeline,
+            queue: amplitude.trackingQueue
         )
         interceptor.setIdentifyBatchInterval(identifyBatchIntervalMillis)
     }
@@ -44,19 +46,19 @@ final class IdentifyInterceptorTests: XCTestCase {
 
     func testMinimumIdentifyBatchInterval() {
         var identifyBatchIntervalMillis = 0
-        var interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
+        var interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, queue: .main, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
         XCTAssertEqual(interceptor1.getIdentifyBatchInterval(), TimeInterval.milliseconds(Constants.MIN_IDENTIFY_BATCH_INTERVAL_MILLIS))
 
         identifyBatchIntervalMillis = Constants.MIN_IDENTIFY_BATCH_INTERVAL_MILLIS - 1
-        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
+        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, queue: .main, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
         XCTAssertEqual(interceptor1.getIdentifyBatchInterval(), TimeInterval.milliseconds(Constants.MIN_IDENTIFY_BATCH_INTERVAL_MILLIS))
 
         identifyBatchIntervalMillis = Constants.MIN_IDENTIFY_BATCH_INTERVAL_MILLIS
-        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
+        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, queue: .main, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
         XCTAssertEqual(interceptor1.getIdentifyBatchInterval(), TimeInterval.milliseconds(identifyBatchIntervalMillis))
 
         identifyBatchIntervalMillis = Constants.MIN_IDENTIFY_BATCH_INTERVAL_MILLIS * 2
-        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
+        interceptor1 = IdentifyInterceptor(configuration: configuration, pipeline: pipeline, queue: .main, identifyBatchIntervalMillis: identifyBatchIntervalMillis)
         XCTAssertEqual(interceptor1.getIdentifyBatchInterval(), TimeInterval.milliseconds(identifyBatchIntervalMillis))
     }
 
@@ -135,9 +137,8 @@ final class IdentifyInterceptorTests: XCTestCase {
             destination: ["key-1": nil, "key-2": "value-2", "key-3": nil, "key-4": nil],
             source: ["key-1": "value-1", "key-2": nil, "key-3": nil, "key-5": nil]
         )
-        XCTAssertTrue(getDictionary(merged).isEqual(
-            to: ["key-1": "value-1", "key-2": "value-2", "key-3": nil, "key-4": nil, "key-5": nil])
-        )
+        XCTAssertEqual(getDictionary(merged),
+                       ["key-1": "value-1", "key-2": "value-2", "key-3": nil, "key-4": nil, "key-5": nil] as NSDictionary)
 
         merged = interceptor.mergeUserProperties(
             destination: ["key-1": NSNull(), "key-2": "value-2", "key-3": NSNull(), "key-4": NSNull()],
@@ -386,6 +387,7 @@ final class IdentifyInterceptorTests: XCTestCase {
         // intercepted event should be transferred on batch interval
         let dummy1Expectation = expectation(description: "dummy1")
         _ = XCTWaiter.wait(for: [dummy1Expectation], timeout: TimeInterval.seconds(Int(Self.IDENTIFY_UPLOAD_INTERVAL_SECONDS + 1)))
+        amplitude.waitForTrackingQueue()
         XCTAssertEqual(pipeline.eventCount, 1)
         interceptedIdentifies = identifyStorage.events()
         XCTAssertEqual(interceptedIdentifies.count, 0)
@@ -410,6 +412,7 @@ final class IdentifyInterceptorTests: XCTestCase {
         // intercepted event should be transferred on batch interval
         let dummy2Expectation = expectation(description: "dummy2")
         _ = XCTWaiter.wait(for: [dummy2Expectation], timeout: TimeInterval.seconds(Int(Self.IDENTIFY_UPLOAD_INTERVAL_SECONDS + 1)))
+        amplitude.waitForTrackingQueue()
         XCTAssertEqual(pipeline.eventCount, 2)
         interceptedIdentifies = identifyStorage.events()
         XCTAssertEqual(interceptedIdentifies.count, 0)

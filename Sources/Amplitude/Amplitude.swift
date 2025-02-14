@@ -10,6 +10,7 @@ public class Amplitude {
 
     var state: State = State()
     var contextPlugin: ContextPlugin
+    let timeline = Timeline()
 
     lazy var storage: any Storage = {
         return self.configuration.storageProvider
@@ -19,17 +20,26 @@ public class Amplitude {
         return self.configuration.identifyStorageProvider
     }()
 
-    lazy var timeline: Timeline = {
-        return Timeline()
-    }()
-
-    lazy var sessions: Sessions = {
-        return Sessions(amplitude: self)
-    }()
+    private var sessionsLock = NSLock()
+    private var _sessions: Sessions?
+    var sessions: Sessions {
+        get {
+            sessionsLock.synchronizedLazy(&_sessions) {
+                Sessions(amplitude: self)
+            }
+        }
+        set {
+            sessionsLock.withLock {
+                _sessions = newValue
+            }
+        }
+    }
 
     public lazy var logger: (any Logger)? = {
         return self.configuration.loggerProvider
     }()
+
+    let trackingQueue = DispatchQueue(label: "com.amplitude.analytics", target: .global(qos: .utility))
 
     public init(
         configuration: Configuration
@@ -53,7 +63,8 @@ public class Amplitude {
             state.userId = userId
         }
 
-        if self.configuration.offline != NetworkConnectivityCheckerPlugin.Disabled {
+        if configuration.offline != NetworkConnectivityCheckerPlugin.Disabled,
+           VendorSystem.current.networkConnectivityCheckingEnabled {
             _ = add(plugin: NetworkConnectivityCheckerPlugin())
         }
         // required plugin for specific platform, only has lifecyclePlugin now
@@ -64,6 +75,15 @@ public class Amplitude {
         _ = add(plugin: AnalyticsConnectorPlugin())
         _ = add(plugin: AnalyticsConnectorIdentityPlugin())
         _ = add(plugin: AmplitudeDestinationPlugin())
+
+        // Monitor changes to optOut to send to Timeline
+        configuration.optOutChanged = { [weak self] optOut in
+            self?.timeline.onOptOutChanged(optOut)
+        }
+
+        trackingQueue.async { [self] in
+            self.trimQueuedEvents()
+        }
     }
 
     convenience init(apiKey: String, configuration: Configuration) {
@@ -84,9 +104,7 @@ public class Amplitude {
     }
 
     @discardableResult
-    public func track(eventType: String, eventProperties: [String: Any]? = nil, options: EventOptions? = nil)
-        -> Amplitude
-    {
+    public func track(eventType: String, eventProperties: [String: Any]? = nil, options: EventOptions? = nil) -> Amplitude {
         let event = BaseEvent(eventType: eventType)
         event.eventProperties = eventProperties
         if let eventOptions = options {
@@ -114,10 +132,10 @@ public class Amplitude {
         if let eventOptions = options {
             event.mergeEventOptions(eventOptions: eventOptions)
             if eventOptions.userId != nil {
-                _ = setUserId(userId: eventOptions.userId)
+                setUserId(userId: eventOptions.userId)
             }
             if eventOptions.deviceId != nil {
-                _ = setDeviceId(deviceId: eventOptions.deviceId)
+                setDeviceId(deviceId: eventOptions.deviceId)
             }
         }
         process(event: event)
@@ -247,9 +265,11 @@ public class Amplitude {
 
     @discardableResult
     public func flush() -> Amplitude {
-        timeline.apply { plugin in
-            if let _plugin = plugin as? EventPlugin {
-                _plugin.flush()
+        trackingQueue.async {
+            self.timeline.apply { plugin in
+                if let _plugin = plugin as? EventPlugin {
+                    _plugin.flush()
+                }
             }
         }
         return self
@@ -259,6 +279,7 @@ public class Amplitude {
     public func setUserId(userId: String?) -> Amplitude {
         try? storage.write(key: .USER_ID, value: userId)
         state.userId = userId
+        timeline.onUserIdChanged(userId)
         return self
     }
 
@@ -266,6 +287,7 @@ public class Amplitude {
     public func setDeviceId(deviceId: String?) -> Amplitude {
         try? storage.write(key: .DEVICE_ID, value: deviceId)
         state.deviceId = deviceId
+        timeline.onDeviceIdChanged(deviceId)
         return self
     }
 
@@ -283,10 +305,17 @@ public class Amplitude {
 
     @discardableResult
     public func setSessionId(timestamp: Int64) -> Amplitude {
-        let sessionEvents = sessions.assignEventId(
-            events: timestamp >= 0 ? sessions.startNewSession(timestamp: timestamp) : sessions.endCurrentSession()
-        )
-        sessionEvents.forEach { e in timeline.processEvent(event: e) }
+        trackingQueue.async { [self] in
+            let sessionEvents: [BaseEvent]
+            if timestamp >= 0 {
+                sessionEvents = self.sessions.startNewSession(timestamp: timestamp)
+            } else {
+                sessionEvents = self.sessions.endCurrentSession()
+            }
+            self.sessions.assignEventId(events: sessionEvents).forEach { e in
+                self.timeline.processEvent(event: e)
+            }
+        }
         return self
     }
 
@@ -299,9 +328,8 @@ public class Amplitude {
 
     @discardableResult
     public func reset() -> Amplitude {
-        _ = setUserId(userId: nil)
-        _ = setDeviceId(deviceId: nil)
-        contextPlugin.initializeDeviceId()
+        setUserId(userId: nil)
+        contextPlugin.initializeDeviceId(forceReset: true)
         return self
     }
 
@@ -314,26 +342,33 @@ public class Amplitude {
             logger?.log(message: "Skip event based on opt out configuration")
             return
         }
-        let events = sessions.processEvent(event: event, inForeground: inForeground)
-        events.forEach { e in timeline.processEvent(event: e) }
+        let inForeground = inForeground
+        trackingQueue.async { [self] in
+            let events = self.sessions.processEvent(event: event, inForeground: inForeground)
+            events.forEach { e in self.timeline.processEvent(event: e) }
+        }
     }
 
     func onEnterForeground(timestamp: Int64) {
+        inForeground = true
         let dummySessionStartEvent = BaseEvent(
             timestamp: timestamp,
             eventType: Constants.AMP_SESSION_START_EVENT
         )
-        let events = sessions.processEvent(event: dummySessionStartEvent, inForeground: false)
-        // Set inForeground to true only after we have successfully started a new session if needed. 
-        inForeground = true
-        events.forEach { e in timeline.processEvent(event: e) }
+        trackingQueue.async { [self] in
+            // set inForeground to false to represent state before event was fired
+            let events = self.sessions.processEvent(event: dummySessionStartEvent, inForeground: false)
+            events.forEach { e in self.timeline.processEvent(event: e) }
+        }
     }
 
     func onExitForeground(timestamp: Int64) {
         inForeground = false
-        sessions.lastEventTime = timestamp
+        trackingQueue.async { [self] in
+            self.sessions.lastEventTime = timestamp
+        }
         if configuration.flushEventsOnClose == true {
-            _ = self.flush()
+            flush()
         }
     }
 
@@ -425,5 +460,31 @@ public class Amplitude {
 
     internal func isSandboxEnabled() -> Bool {
         return SandboxHelper().isSandboxEnabled()
+    }
+
+    func trimQueuedEvents() {
+        logger?.debug(message: "Trimming queued events..")
+        guard configuration.maxQueuedEventCount > 0,
+              let eventBlocks: [URL] = storage.read(key: .EVENTS),
+              !eventBlocks.isEmpty else {
+            return
+        }
+
+        var eventCount = 0
+        // Blocks are returned in sorted order, oldest -> newest. Reverse to count newest blocks first.
+        // Only whole blocks are deleted, meaning up to maxQueuedEventCount + flushQueueSize - 1
+        // events may be left on device.
+        for eventBlock in eventBlocks.reversed() {
+            if eventCount < configuration.maxQueuedEventCount {
+                if let eventString = storage.getEventsString(eventBlock: eventBlock),
+                   let eventArray =  BaseEvent.fromArrayString(jsonString: eventString) {
+                    eventCount += eventArray.count
+                }
+            } else {
+                logger?.debug(message: "Trimming \(eventBlock)")
+                storage.remove(eventBlock: eventBlock)
+            }
+        }
+        logger?.debug(message: "Completed trimming events, kept \(eventCount) most recent events")
     }
 }

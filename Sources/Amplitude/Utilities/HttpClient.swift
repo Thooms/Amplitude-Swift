@@ -9,8 +9,10 @@ import Foundation
 
 class HttpClient {
     let configuration: Configuration
-    internal let session: URLSession
+    let session: URLSession
+    let logger: (any Logger)?
     let diagnostics: Diagnostics
+    let callbackQueue: DispatchQueue
 
     private lazy var dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -18,9 +20,11 @@ class HttpClient {
         return formatter
     }()
 
-    init(configuration: Configuration, diagnostics: Diagnostics) {
+    init(configuration: Configuration, diagnostics: Diagnostics, callbackQueue: DispatchQueue? = nil) {
         self.configuration = configuration
         self.diagnostics = diagnostics
+        self.logger = configuration.loggerProvider
+        self.callbackQueue = callbackQueue ?? .global()
 
         let sessionConfiguration = URLSessionConfiguration.default
         sessionConfiguration.httpMaximumConnectionsPerHost = 2
@@ -35,21 +39,37 @@ class HttpClient {
             let request = try getRequest()
             let requestData = getRequestData(events: events)
 
-            sessionTask = session.uploadTask(with: request, from: requestData) { data, response, error in
-                if error != nil {
-                    completion(.failure(error!))
-                } else if let httpResponse = response as? HTTPURLResponse {
-                    switch httpResponse.statusCode {
-                    case 1..<300:
-                        completion(.success(httpResponse.statusCode))
-                    default:
-                        completion(.failure(Exception.httpError(code: httpResponse.statusCode, data: data)))
+            sessionTask = session.uploadTask(with: request, from: requestData) { [callbackQueue, configuration, logger] data, response, error in
+                callbackQueue.async {
+                    if let error = error {
+                        let nsError = error as NSError
+                        if nsError.domain == NSURLErrorDomain {
+                            switch nsError.code {
+                            case NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost, NSURLErrorCannotFindHost, NSURLErrorAppTransportSecurityRequiresSecureConnection, NSURLErrorNotConnectedToInternet, NSURLErrorBadURL:
+                                logger?.error(message: "Conection failed with error: \(error.localizedDescription), marking offline")
+                                configuration.offline = true
+                            default:
+                                logger?.error(message: "Request failed with error: \(error.localizedDescription)")
+                            }
+                        }
+                        completion(.failure(error))
+                    } else if let httpResponse = response as? HTTPURLResponse {
+                        switch httpResponse.statusCode {
+                        case 1..<300:
+                            completion(.success(httpResponse.statusCode))
+                            logger?.debug(message: "Successfully completed request")
+                        default:
+                            let response = String(data: data ?? Data(), encoding: .utf8) ?? ""
+                            logger?.error(message: "Response failed with code\(httpResponse.statusCode): \(response)")
+                            completion(.failure(Exception.httpError(code: httpResponse.statusCode, data: data)))
+                        }
                     }
+                    backgroundTaskCompletion?()
                 }
-                backgroundTaskCompletion?()
             }
             sessionTask!.resume()
         } catch {
+            logger?.debug(message: "Failed to construct request")
             completion(.failure(Exception.httpError(code: 500, data: nil)))
             backgroundTaskCompletion?()
         }
@@ -101,13 +121,10 @@ class HttpClient {
                 ,"options":{"min_id_length":\(minIdLength)}
                 """
         }
-        if diagnostics.hasDiagnostics() {
-            let diagnosticsInfo = diagnostics.extractDiagonosticsToString()
-            if !diagnosticsInfo.isEmpty {
-                requestPayload += """
+        if let diagnosticsInfo = diagnostics.extractDiagnosticsToString(), !diagnosticsInfo.isEmpty {
+            requestPayload += """
                 ,"request_metadata":{"sdk":\(diagnosticsInfo)}
                 """
-            }
         }
         requestPayload += "}"
         return requestPayload.data(using: .utf8)

@@ -104,7 +104,7 @@ class ContextPlugin: BeforePlugin {
         let trackingOptions = configuration?.trackingOptions
 
         if configuration?.enableCoppaControl ?? false {
-            trackingOptions?.mergeIn(other: TrackingOptions().forCoppaControl())
+            trackingOptions?.mergeIn(other: TrackingOptions.forCoppaControl())
         }
 
         if trackingOptions?.shouldTrackVersionName() ?? false {
@@ -155,13 +155,15 @@ class ContextPlugin: BeforePlugin {
         }
     }
 
-    func initializeDeviceId() {
-        var deviceId = amplitude?.state.deviceId
+    func initializeDeviceId(forceReset: Bool = false) {
+        var deviceId = forceReset ? nil : amplitude?.state.deviceId
         if isValidDeviceId(deviceId) {
             return
         }
         if deviceId == nil, amplitude?.configuration.trackingOptions.shouldTrackIDFV() ?? false {
-            deviceId = staticContext["idfv"] as? String
+            if let idfv = staticContext["idfv"] as? String, idfv != "00000000-0000-0000-0000-000000000000" {
+                deviceId = idfv
+            }
         }
         if deviceId == nil {
             deviceId = NSUUID().uuidString

@@ -1,30 +1,40 @@
 import Foundation
 
 public class Sessions {
-    private let amplitude: Amplitude
-
+    private let configuration: Configuration
+    private let storage: Storage
+    private let logger: (any Logger)?
+    private let timeline: Timeline
     private var _sessionId: Int64 = -1
-    var sessionId: Int64 {
-        get { _sessionId }
-        set {
-            _sessionId = newValue
-            do {
-                try amplitude.storage.write(key: StorageKey.PREVIOUS_SESSION_ID, value: _sessionId)
-            } catch {
-                amplitude.logger?.warn(message: "Can't write PREVIOUS_SESSION_ID to storage: \(error)")
+    private(set) var sessionId: Int64 {
+        get {
+            sessionIdLock.withLock {
+                _sessionId
             }
         }
+        set {
+            sessionIdLock.withLock {
+                _sessionId = newValue
+            }
+            do {
+                try storage.write(key: StorageKey.PREVIOUS_SESSION_ID, value: _sessionId)
+            } catch {
+                logger?.warn(message: "Can't write PREVIOUS_SESSION_ID to storage: \(error)")
+            }
+            timeline.onSessionIdChanged(_sessionId)
+        }
     }
+    private let sessionIdLock = NSLock()
 
     private var _lastEventId: Int64 = 0
-    var lastEventId: Int64 {
+    private(set) var lastEventId: Int64 {
         get { _lastEventId }
         set {
             _lastEventId = newValue
             do {
-                try amplitude.storage.write(key: StorageKey.LAST_EVENT_ID, value: _lastEventId)
+                try storage.write(key: StorageKey.LAST_EVENT_ID, value: _lastEventId)
             } catch {
-                amplitude.logger?.warn(message: "Can't write LAST_EVENT_ID to storage: \(error)")
+                logger?.warn(message: "Can't write LAST_EVENT_ID to storage: \(error)")
             }
         }
     }
@@ -35,15 +45,18 @@ public class Sessions {
         set {
             _lastEventTime = newValue
             do {
-                try amplitude.storage.write(key: StorageKey.LAST_EVENT_TIME, value: _lastEventTime)
+                try storage.write(key: StorageKey.LAST_EVENT_TIME, value: _lastEventTime)
             } catch {
-                amplitude.logger?.warn(message: "Can't write LAST_EVENT_TIME to storage: \(error)")
+                logger?.warn(message: "Can't write LAST_EVENT_TIME to storage: \(error)")
             }
         }
     }
 
     init(amplitude: Amplitude) {
-        self.amplitude = amplitude
+        configuration = amplitude.configuration
+        storage = amplitude.storage
+        logger = amplitude.logger
+        timeline = amplitude.timeline
         self._sessionId = amplitude.storage.read(key: .PREVIOUS_SESSION_ID) ?? -1
         self._lastEventId = amplitude.storage.read(key: .LAST_EVENT_ID) ?? 0
         self._lastEventTime = amplitude.storage.read(key: .LAST_EVENT_TIME) ?? -1
@@ -101,7 +114,7 @@ public class Sessions {
 
     private func isWithinMinTimeBetweenSessions(timestamp: Int64) -> Bool {
         let timeDelta = timestamp - self.lastEventTime
-        return timeDelta < amplitude.configuration.minTimeBetweenSessionsMillis
+        return timeDelta < configuration.minTimeBetweenSessionsMillis
     }
 
     public func startNewSessionIfNeeded(timestamp: Int64, inForeground: Bool) -> [BaseEvent]? {
@@ -116,7 +129,7 @@ public class Sessions {
 
     public func startNewSession(timestamp: Int64) -> [BaseEvent] {
         var sessionEvents: [BaseEvent] = Array()
-        let trackingSessionEvents = amplitude.configuration.defaultTracking.sessions
+        let trackingSessionEvents = configuration.autocapture.contains(.sessions)
 
         // end previous session
         if trackingSessionEvents && self.sessionId >= 0 {
@@ -145,7 +158,7 @@ public class Sessions {
 
     public func endCurrentSession() -> [BaseEvent] {
         var sessionEvents: [BaseEvent] = Array()
-        let trackingSessionEvents = amplitude.configuration.defaultTracking.sessions
+        let trackingSessionEvents = configuration.autocapture.contains(.sessions)
 
         if trackingSessionEvents && self.sessionId >= 0 {
             let sessionEndEvent = BaseEvent(
