@@ -1,0 +1,13 @@
+{
+  "pins" : [
+    {
+      "identity" : "analytics-connector-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Thooms/analytics-connector-ios.git",
+      "state" : {
+        "revision" : "09689dbd2683c676102bf0c642147f199511132e"
+      }
+    }
+  ],
+  "version" : 2
+}
